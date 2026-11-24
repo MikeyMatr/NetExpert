@@ -1,4 +1,5 @@
-const state = { ticketId: null, sessionId: null, token: null, user: null };
+const state = { ticketId: null, sessionId: null, token: null, user: null,
+  adminTab: 'operators', adminTicketsPage: 1, adminTicketsSearch: '' };
 const $ = selector => document.querySelector(selector);
 const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels = {new:'Новое',in_progress:'В работе',resolved:'Решено',escalated:'Передано'};
@@ -36,11 +37,14 @@ function welcome() {
 function logout() {
   state.token = null; state.user = null; state.ticketId = null; state.sessionId = null;
   $('#current-user').textContent = ''; $('#logout').hidden = true;
+  $('#admin-link').hidden = true; $('#home-link').hidden = true;
   $('#ticket-list').innerHTML = '';
   loginScreen();
 }
 function loginScreen() {
-  content(`<div class="panel welcome"><span class="kicker">ДОСТУП ДЛЯ СОТРУДНИКОВ</span><h1>Вход в NetExpert</h1>
+  const adminPage = location.pathname === '/adminpanel';
+  document.body.classList.toggle('admin-mode', adminPage);
+  content(`<div class="panel welcome"><span class="kicker">${adminPage ? 'ПАНЕЛЬ АДМИНИСТРАТОРА' : 'ДОСТУП ДЛЯ СОТРУДНИКОВ'}</span><h1>Вход в NetExpert</h1>
     <p class="muted">Используйте учётную запись, созданную администратором.</p>
     <form id="login-form"><div class="fields">
       <label class="field">Логин<input name="username" required autocomplete="username"></label>
@@ -53,10 +57,122 @@ function loginScreen() {
     state.token = result.access_token;
     state.user = await api('/api/auth/me');
     if (!['operator','admin'].includes(state.user.role)) { logout(); throw new Error('Рабочее место доступно операторам'); }
+    if (location.pathname === '/adminpanel' && state.user.role !== 'admin') {
+      logout(); throw new Error('Панель доступна только администратору');
+    }
     $('#current-user').textContent = state.user.username;
     $('#logout').hidden = false;
-    welcome(); await loadTickets();
+    $('#admin-link').hidden = state.user.role !== 'admin';
+    await showCurrentPage();
   }); };
+}
+async function showCurrentPage() {
+  const adminPage = location.pathname === '/adminpanel';
+  document.body.classList.toggle('admin-mode', adminPage);
+  $('#home-link').hidden = !adminPage;
+  $('#admin-link').hidden = adminPage || state.user?.role !== 'admin';
+  if (!state.user) { loginScreen(); return; }
+  if (adminPage) {
+    if (state.user.role !== 'admin') { logout(); flash('Панель доступна только администратору'); return; }
+    await showAdminPanel();
+  } else {
+    welcome(); await loadTickets();
+  }
+}
+async function showAdminPanel() {
+  if (state.adminTab === 'tickets') return showAdminTickets();
+  return showOperators();
+}
+function adminShell(body) {
+  content(`<div class="admin-tabs" aria-label="Разделы панели администратора">
+    <button class="btn ${state.adminTab === 'operators' ? 'primary' : ''}" data-admin-tab="operators" aria-pressed="${state.adminTab === 'operators'}">Операторы</button>
+    <button class="btn ${state.adminTab === 'tickets' ? 'primary' : ''}" data-admin-tab="tickets" aria-pressed="${state.adminTab === 'tickets'}">Все обращения</button>
+    </div>${body}`);
+  document.querySelectorAll('[data-admin-tab]').forEach(button => button.onclick = () => run(async () => {
+    state.adminTab = button.dataset.adminTab;
+    await showAdminPanel();
+  }));
+}
+async function showOperators() {
+  const operators = await api('/api/admin/operators');
+  content(`<div class="panel"><span class="kicker">УПРАВЛЕНИЕ ДОСТУПОМ</span><h1>Операторы</h1>
+    <p class="muted">Добавляйте сотрудников первой линии и отключайте доступ без потери истории обращений.</p>
+    <form id="operator-form"><div class="fields admin-fields">
+      <label class="field">Логин<input name="username" required maxlength="100" autocomplete="off"></label>
+      <label class="field">Пароль<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label>
+    </div><button class="btn primary" type="submit">Добавить оператора</button></form></div>
+    <div class="panel"><h2>Учётные записи</h2><div class="operator-list">${operators.length ? operators.map(o =>
+      `<div class="operator-row"><div><strong>${safe(o.username)}</strong><small>Создан: ${date(o.created_at)}</small></div>
+      <div class="actions"><span class="badge ${o.is_active ? 'resolved' : ''}">${o.is_active ? 'Активен' : 'Отключён'}</span>
+      <button class="btn small" data-operator="${o.id}" data-action="${o.is_active ? 'disable' : 'restore'}">${o.is_active ? 'Отключить' : 'Восстановить'}</button></div></div>`).join('') : '<p class="muted">Операторов пока нет.</p>'}</div></div>`);
+  $('#operator-form').onsubmit = event => { event.preventDefault(); run(async () => {
+    const form = new FormData(event.target);
+    const button = event.target.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      await api('/api/admin/operators', {method:'POST',body:JSON.stringify({
+        username:String(form.get('username')).trim(), password:String(form.get('password'))})});
+      await showOperators();
+    } finally { button.disabled = false; }
+  }); };
+  document.querySelectorAll('[data-operator]').forEach(button => button.onclick = () => run(async () => {
+    const id = Number(button.dataset.operator);
+    if (button.dataset.action === 'disable' && !confirm('Отключить вход для этого оператора? История обращений сохранится.')) return;
+    button.disabled = true;
+    try {
+      await api(`/api/admin/operators/${id}${button.dataset.action === 'restore' ? '/restore' : ''}`,
+        {method:button.dataset.action === 'restore' ? 'POST' : 'DELETE'});
+      await showOperators();
+    } finally { button.disabled = false; }
+  }));
+}
+async function showAdminTickets() {
+  const search = state.adminTicketsSearch;
+  const result = await api(`/api/admin/tickets?page=${state.adminTicketsPage}&search=${encodeURIComponent(search)}`);
+  const {items, total, page, page_size: pageSize} = result;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  adminShell(`<div class="panel"><span class="kicker">ПАНЕЛЬ АДМИНИСТРАТОРА</span><h1>Все обращения</h1>
+    <p class="muted">Обращения всех операторов, в том числе записи без назначения.</p>
+    <form id="admin-ticket-search" class="admin-search">
+      <input name="search" aria-label="Поиск обращений" placeholder="Номер, абонент или автор" maxlength="100" value="${safe(search)}">
+      <button class="btn" type="submit">Найти</button></form></div>
+    <div class="panel"><div class="heading"><h2>Найдено: ${total}</h2><span class="muted smalltext">Страница ${page} из ${pages}</span></div>
+      <div class="admin-ticket-list">${items.length ? items.map(t => `<button class="admin-ticket-row" data-admin-ticket="${t.id}">
+        <span class="row"><strong>№ ${t.id} · ${safe(t.subscriber_id)}</strong><span class="badge ${safe(t.status)}">${safe(labels[t.status] || t.status)}</span></span>
+        <span class="muted smalltext">${date(t.created_at)} · Создал: ${safe(t.created_by || '—')} · Назначен: ${safe(t.assigned_operator || 'Не назначен')}</span>
+        <span class="admin-ticket-description">${safe(t.problem_description)}</span></button>`).join('') : '<p class="muted">Обращений не найдено.</p>'}</div>
+      <div class="actions admin-pages"><button id="tickets-prev" class="btn small" ${page <= 1 ? 'disabled' : ''}>Назад</button>
+        <button id="tickets-next" class="btn small" ${page >= pages ? 'disabled' : ''}>Далее</button></div></div>`);
+  $('#admin-ticket-search').onsubmit = event => { event.preventDefault(); run(async () => {
+    state.adminTicketsSearch = String(new FormData(event.target).get('search')).trim();
+    state.adminTicketsPage = 1;
+    await showAdminTickets();
+  }); };
+  $('#tickets-prev').onclick = () => run(async () => { state.adminTicketsPage--; await showAdminTickets(); });
+  $('#tickets-next').onclick = () => run(async () => { state.adminTicketsPage++; await showAdminTickets(); });
+  document.querySelectorAll('[data-admin-ticket]').forEach(button => button.onclick =
+    () => run(() => showAdminTicket(Number(button.dataset.adminTicket))));
+}
+async function showAdminTicket(id) {
+  const [t, staff] = await Promise.all([api('/api/tickets/' + id), api('/api/staff')]);
+  const assignee = staff.find(person => person.id === t.assigned_operator_id);
+  adminShell(`<div class="panel"><button id="back-to-admin-tickets" class="btn small">← К списку обращений</button>
+    <div class="heading admin-ticket-heading"><div><span class="kicker">КАРТОЧКА ОБРАЩЕНИЯ</span><h1>Обращение № ${t.id}</h1></div>
+      <span class="badge ${safe(t.status)}">${safe(labels[t.status] || t.status)}</span></div>
+    <p>${safe(t.problem_description)}</p>
+    <div class="meta"><div><small>Абонент</small><b>${safe(t.subscriber_id)}</b></div>
+      <div><small>Создал</small><b>${safe(t.created_by || '—')}</b></div>
+      <div><small>Создано</small><b>${date(t.created_at)}</b></div></div>
+    <p class="muted smalltext">Назначенный оператор: ${safe(assignee?.username || 'Не назначен')}</p></div>
+    <div class="panel"><h2>Диагностические сессии</h2>${t.sessions.length ?
+      `<ul class="history">${t.sessions.map(s => `<li>${date(s.started_at)} · ${s.status === 'active' ? 'В процессе' : safe(s.suspected_cause || 'Завершена')}</li>`).join('')}</ul>` : '<p class="muted">Диагностика ещё не проводилась.</p>'}</div>
+    <div class="panel"><h2>История статусов</h2>${t.history.length ?
+      `<ul class="history">${t.history.map(h => `<li><b>${safe(labels[h.new_status] || h.new_status)}</b> · ${safe(h.changed_by || '—')} · ${date(h.changed_at)}${h.comment ? '<br>' + safe(h.comment) : ''}</li>`).join('')}</ul>` : '<p class="muted">Событий пока нет.</p>'}</div>`);
+  $('#back-to-admin-tickets').onclick = () => run(showAdminTickets);
+}
+function navigate(path) {
+  history.pushState(null, '', path);
+  run(showCurrentPage);
 }
 function newTicket() {
   state.ticketId = null; state.sessionId = null;
@@ -132,6 +248,9 @@ function showSession(data) {
 }
 $('#new-ticket').onclick = () => state.user ? newTicket() : loginScreen();
 $('#logout').onclick = logout;
+$('#admin-link').onclick = () => navigate('/adminpanel');
+$('#home-link').onclick = () => navigate('/');
+window.addEventListener('popstate', () => run(showCurrentPage));
 let searchTimer;
 $('#search').oninput = () => { if (!state.user) return; clearTimeout(searchTimer); searchTimer = setTimeout(() => run(loadTickets), 250); };
 loginScreen();

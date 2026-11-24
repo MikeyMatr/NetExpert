@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .db import connection, initialize
+from .db import bootstrap_admin, connection, initialize
 from .security import admin_user, create_token, current_user, password_hash, ticket_user
 
 
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     if len(os.getenv('JWT_SECRET', '')) < 32:
         raise RuntimeError('Set JWT_SECRET in .env to a random value of at least 32 characters')
     initialize()
+    bootstrap_admin()
     yield
 
 
@@ -44,6 +45,11 @@ class StatusUpdate(BaseModel):
 
 class Assignment(BaseModel):
     operator_id: int
+
+
+class OperatorCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=12, max_length=128)
 
 
 def allowed_ticket(conn, ticket_id: int, user: dict, lock=False):
@@ -94,6 +100,78 @@ def assign_ticket(ticket_id: int, data: Assignment,
 @app.get('/')
 def homepage():
     return FileResponse(FRONTEND / 'index.html')
+
+
+@app.get('/adminpanel', include_in_schema=False)
+def adminpanel():
+    # The shell and login are public; all account data and writes require an admin JWT.
+    return FileResponse(FRONTEND / 'index.html')
+
+
+@app.get('/api/admin/operators')
+def list_operators(user: Annotated[dict, Depends(admin_user)]):
+    with connection() as conn:
+        return conn.execute('''SELECT id, username, is_active, created_at FROM staff_users
+            WHERE role='operator' ORDER BY created_at DESC, id DESC''').fetchall()
+
+
+@app.post('/api/admin/operators', status_code=201)
+def add_operator(data: OperatorCreate, user: Annotated[dict, Depends(admin_user)]):
+    username = data.username.strip()
+    if not username:
+        raise HTTPException(422, 'Enter an operator login')
+    with connection() as conn:
+        row = conn.execute('''INSERT INTO staff_users(username, password_hash, role)
+            VALUES (%s, %s, 'operator') ON CONFLICT (username) DO NOTHING
+            RETURNING id, username, is_active, created_at''',
+            (username, password_hash.hash(data.password))).fetchone()
+        if row is None:
+            raise HTTPException(409, 'This login is already in use')
+        return row
+
+
+@app.delete('/api/admin/operators/{operator_id}')
+def remove_operator(operator_id: int, user: Annotated[dict, Depends(admin_user)]):
+    # Keep the row: tickets and audit records reference this operator.
+    with connection() as conn:
+        row = conn.execute('''UPDATE staff_users SET is_active=FALSE
+            WHERE id=%s AND role='operator' AND is_active=TRUE RETURNING id, username''',
+            (operator_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, 'Active operator not found')
+        return row
+
+
+@app.post('/api/admin/operators/{operator_id}/restore')
+def restore_operator(operator_id: int, user: Annotated[dict, Depends(admin_user)]):
+    with connection() as conn:
+        row = conn.execute('''UPDATE staff_users SET is_active=TRUE
+            WHERE id=%s AND role='operator' AND is_active=FALSE
+            RETURNING id, username''', (operator_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, 'Inactive operator not found')
+        return row
+
+
+@app.get('/api/admin/tickets')
+def admin_tickets(user: Annotated[dict, Depends(admin_user)],
+                  page: int = Query(default=1, ge=1),
+                  search: str = Query(default='', max_length=100)):
+    """Paginate across every ticket, including unassigned historical records."""
+    search = search.strip()
+    where = '''WHERE (%s = '' OR t.subscriber_id ILIKE %s
+        OR t.id::text = %s OR t.created_by ILIKE %s)'''
+    term = f'%{search}%'
+    params = (search, term, search, term)
+    page_size = 20
+    with connection() as conn:
+        total = conn.execute('SELECT count(*) AS total FROM tickets t ' + where, params).fetchone()['total']
+        rows = conn.execute('''SELECT t.id, t.subscriber_id, t.problem_description,
+            t.status, t.created_at, t.created_by, s.username AS assigned_operator
+            FROM tickets t LEFT JOIN staff_users s ON s.id=t.assigned_operator_id ''' + where + '''
+            ORDER BY t.created_at DESC, t.id DESC LIMIT %s OFFSET %s''',
+            params + (page_size, (page - 1) * page_size)).fetchall()
+    return {'items': rows, 'total': total, 'page': page, 'page_size': page_size}
 
 
 @app.get('/api/health')

@@ -42,3 +42,32 @@ def initialize():
         if not applied:
             conn.execute((base / '002_staff_auth.sql').read_text(encoding='utf-8'))
             conn.execute('INSERT INTO schema_migrations(version) VALUES (%s)', (version,))
+
+
+def bootstrap_admin():
+    """Create or synchronize the administrator configured on this installation."""
+    username = os.getenv('ADMIN_USERNAME', '').strip()
+    password = os.getenv('ADMIN_PASSWORD', '')
+    if not username or len(username) > 100 or len(password) < 12:
+        raise RuntimeError('Set ADMIN_USERNAME (1-100 characters) and ADMIN_PASSWORD (at least 12 characters) in .env')
+
+    # Imported here because security imports connection from this module.
+    from .security import password_hash
+
+    with connection() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(712345091)')
+        row = conn.execute('SELECT id, role, password_hash, is_active FROM staff_users WHERE username=%s',
+                           (username,)).fetchone()
+        if row is None:
+            conn.execute('''INSERT INTO staff_users(username, password_hash, role)
+                VALUES (%s, %s, 'admin')''', (username, password_hash.hash(password)))
+        elif row['role'] != 'admin':
+            raise RuntimeError('ADMIN_USERNAME is already used by an operator or expert')
+        else:
+            # A changed .env password takes effect on the next start; old sessions
+            # still expire normally and can be invalidated by rotating JWT_SECRET.
+            if not password_hash.verify(password, row['password_hash']):
+                conn.execute('UPDATE staff_users SET password_hash=%s WHERE id=%s',
+                             (password_hash.hash(password), row['id']))
+            if not row['is_active']:
+                conn.execute('UPDATE staff_users SET is_active=TRUE WHERE id=%s', (row['id'],))
