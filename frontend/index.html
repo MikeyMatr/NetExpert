@@ -4,16 +4,36 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NetExpert — диагностика подключений</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" defer></script>
-  <script src="/static/admin_catalog.js" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=adminfeatures-4">
+  <script src="/static/app.js?v=adminfeatures-3" defer></script>
+  <script src="/static/admin_catalog.js?v=adminfeatures-4" defer></script>
 </head>
 <body>
-  <header class="topbar"><div class="brand"><span class="logo">N<span>·</span>E</span><div><strong>NetExpert</strong><small>Рабочее место первой линии</small></div></div><div class="top-right"><button id="home-link" class="btn small" hidden>Обращения</button><button id="admin-link" class="btn small" hidden>Операторы</button><span id="current-user" class="top-note"></span><button id="logout" class="btn small" hidden>Выйти</button></div></header>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">N<span>·</span>E</span>
+      <div>
+        <strong>NetExpert</strong>
+        <small>Рабочее место первой линии</small>
+      </div>
+    </div>
+    <div class="top-right">
+      <button id="home-link" class="btn small" hidden>Обращения</button>
+      <button id="admin-link" class="btn small" hidden>Операторы</button>
+      <span id="current-user" class="top-note"></span>
+      <button id="logout" class="btn small" hidden>Выйти</button>
+    </div>
+  </header>
   <main class="layout">
     <aside class="sidebar">
-      <div class="sidebar-head"><span class="eyebrow">ОБРАЩЕНИЯ</span><button id="new-ticket" class="btn primary small">+ Новое</button></div>
-      <label class="search"><span>⌕</span><input id="search" placeholder="Номер или абонент" aria-label="Поиск обращений"></label>
+      <div class="sidebar-head">
+        <span class="eyebrow">ОБРАЩЕНИЯ</span>
+        <button id="new-ticket" class="btn primary small">+ Новое</button>
+      </div>
+      <label class="search">
+        <span>⌕</span>
+        <input id="search" placeholder="Номер или абонент" aria-label="Поиск обращений">
+      </label>
       <div id="ticket-list" class="ticket-list" aria-live="polite"></div>
       <p class="sidebar-foot">Данные хранятся в PostgreSQL</p>
     </aside>

@@ -99,7 +99,7 @@ function adminShell(body) {
 }
 async function showOperators() {
   const operators = await api('/api/admin/operators');
-  content(`<div class="panel"><span class="kicker">УПРАВЛЕНИЕ ДОСТУПОМ</span><h1>Операторы</h1>
+  adminShell(`<div class="panel"><span class="kicker">УПРАВЛЕНИЕ ДОСТУПОМ</span><h1>Операторы</h1>
     <p class="muted">Добавляйте сотрудников первой линии и отключайте доступ без потери истории обращений.</p>
     <form id="operator-form"><div class="fields admin-fields">
       <label class="field">Логин<input name="username" required maxlength="100" autocomplete="off"></label>
