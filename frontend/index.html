@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NetExpert — диагностика подключений</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="logo">N<span>·</span>E</span><div><strong>NetExpert</strong><small>Рабочее место первой линии</small></div></div><div class="top-right"><span id="current-user" class="top-note"></span><button id="logout" class="btn small" hidden>Выйти</button></div></header>
+  <main class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-head"><span class="eyebrow">ОБРАЩЕНИЯ</span><button id="new-ticket" class="btn primary small">+ Новое</button></div>
+      <label class="search"><span>⌕</span><input id="search" placeholder="Номер или абонент" aria-label="Поиск обращений"></label>
+      <div id="ticket-list" class="ticket-list" aria-live="polite"></div>
+      <p class="sidebar-foot">Данные хранятся в PostgreSQL</p>
+    </aside>
+    <section class="workspace">
+      <div id="flash" class="flash" role="alert" hidden></div>
+      <div id="content" aria-live="polite"></div>
+    </section>
+  </main>
+</body>
+</html>
