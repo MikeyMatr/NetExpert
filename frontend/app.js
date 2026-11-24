@@ -81,12 +81,16 @@ async function showCurrentPage() {
 }
 async function showAdminPanel() {
   if (state.adminTab === 'tickets') return showAdminTickets();
+  if (state.adminTab === 'services') return showAdminServices();
+  if (state.adminTab === 'rentals') return showAdminRentals();
   return showOperators();
 }
 function adminShell(body) {
   content(`<div class="admin-tabs" aria-label="Разделы панели администратора">
     <button class="btn ${state.adminTab === 'operators' ? 'primary' : ''}" data-admin-tab="operators" aria-pressed="${state.adminTab === 'operators'}">Операторы</button>
     <button class="btn ${state.adminTab === 'tickets' ? 'primary' : ''}" data-admin-tab="tickets" aria-pressed="${state.adminTab === 'tickets'}">Все обращения</button>
+    <button class="btn ${state.adminTab === 'services' ? 'primary' : ''}" data-admin-tab="services" aria-pressed="${state.adminTab === 'services'}">Подключения</button>
+    <button class="btn ${state.adminTab === 'rentals' ? 'primary' : ''}" data-admin-tab="rentals" aria-pressed="${state.adminTab === 'rentals'}">Аренда роутеров</button>
     </div>${body}`);
   document.querySelectorAll('[data-admin-tab]').forEach(button => button.onclick = () => run(async () => {
     state.adminTab = button.dataset.adminTab;
@@ -104,7 +108,8 @@ async function showOperators() {
     <div class="panel"><h2>Учётные записи</h2><div class="operator-list">${operators.length ? operators.map(o =>
       `<div class="operator-row"><div><strong>${safe(o.username)}</strong><small>Создан: ${date(o.created_at)}</small></div>
       <div class="actions"><span class="badge ${o.is_active ? 'resolved' : ''}">${o.is_active ? 'Активен' : 'Отключён'}</span>
-      <button class="btn small" data-operator="${o.id}" data-action="${o.is_active ? 'disable' : 'restore'}">${o.is_active ? 'Отключить' : 'Восстановить'}</button></div></div>`).join('') : '<p class="muted">Операторов пока нет.</p>'}</div></div>`);
+      <button class="btn small" data-operator="${o.id}" data-action="${o.is_active ? 'disable' : 'restore'}">${o.is_active ? 'Отключить' : 'Восстановить'}</button>
+      ${o.can_delete ? `<button class="btn small danger" data-operator="${o.id}" data-action="permanent">Удалить аккаунт</button>` : `<span class="muted smalltext">${o.ticket_count ? 'Связанных обращений: ' + o.ticket_count : 'Остались записи истории'}</span>`}</div></div>`).join('') : '<p class="muted">Операторов пока нет.</p>'}</div></div>`);
   $('#operator-form').onsubmit = event => { event.preventDefault(); run(async () => {
     const form = new FormData(event.target);
     const button = event.target.querySelector('button[type="submit"]');
@@ -118,10 +123,12 @@ async function showOperators() {
   document.querySelectorAll('[data-operator]').forEach(button => button.onclick = () => run(async () => {
     const id = Number(button.dataset.operator);
     if (button.dataset.action === 'disable' && !confirm('Отключить вход для этого оператора? История обращений сохранится.')) return;
+    if (button.dataset.action === 'permanent' && !confirm('Навсегда удалить аккаунт оператора? Это действие нельзя отменить.')) return;
     button.disabled = true;
     try {
-      await api(`/api/admin/operators/${id}${button.dataset.action === 'restore' ? '/restore' : ''}`,
-        {method:button.dataset.action === 'restore' ? 'POST' : 'DELETE'});
+      const action = button.dataset.action;
+      await api(`/api/admin/operators/${id}${action === 'restore' ? '/restore' : action === 'permanent' ? '/permanent' : ''}`,
+        {method:action === 'restore' ? 'POST' : 'DELETE'});
       await showOperators();
     } finally { button.disabled = false; }
   }));
@@ -156,19 +163,25 @@ async function showAdminTickets() {
 async function showAdminTicket(id) {
   const [t, staff] = await Promise.all([api('/api/tickets/' + id), api('/api/staff')]);
   const assignee = staff.find(person => person.id === t.assigned_operator_id);
-  adminShell(`<div class="panel"><button id="back-to-admin-tickets" class="btn small">← К списку обращений</button>
+  adminShell(`<div class="panel"><div class="actions"><button id="back-to-admin-tickets" class="btn small">← К списку обращений</button><button id="delete-admin-ticket" class="btn small danger">Удалить обращение</button></div>
     <div class="heading admin-ticket-heading"><div><span class="kicker">КАРТОЧКА ОБРАЩЕНИЯ</span><h1>Обращение № ${t.id}</h1></div>
       <span class="badge ${safe(t.status)}">${safe(labels[t.status] || t.status)}</span></div>
     <p>${safe(t.problem_description)}</p>
     <div class="meta"><div><small>Абонент</small><b>${safe(t.subscriber_id)}</b></div>
       <div><small>Создал</small><b>${safe(t.created_by || '—')}</b></div>
       <div><small>Создано</small><b>${date(t.created_at)}</b></div></div>
+    ${t.service ? `<p class="muted smalltext">Клиент: ${safe(t.service.client_name)} · Телефон: ${safe(t.service.phone || '—')}<br>Адрес подключения: ${safe(t.service.city)}, ${safe(t.service.street)}, д. ${safe(t.service.building)}${t.service.apartment ? ', кв. ' + safe(t.service.apartment) : ''}</p>` : ''}
     <p class="muted smalltext">Назначенный оператор: ${safe(assignee?.username || 'Не назначен')}</p></div>
     <div class="panel"><h2>Диагностические сессии</h2>${t.sessions.length ?
       `<ul class="history">${t.sessions.map(s => `<li>${date(s.started_at)} · ${s.status === 'active' ? 'В процессе' : safe(s.suspected_cause || 'Завершена')}</li>`).join('')}</ul>` : '<p class="muted">Диагностика ещё не проводилась.</p>'}</div>
     <div class="panel"><h2>История статусов</h2>${t.history.length ?
       `<ul class="history">${t.history.map(h => `<li><b>${safe(labels[h.new_status] || h.new_status)}</b> · ${safe(h.changed_by || '—')} · ${date(h.changed_at)}${h.comment ? '<br>' + safe(h.comment) : ''}</li>`).join('')}</ul>` : '<p class="muted">Событий пока нет.</p>'}</div>`);
   $('#back-to-admin-tickets').onclick = () => run(showAdminTickets);
+  $('#delete-admin-ticket').onclick = () => run(async () => {
+    if (!confirm(`Навсегда удалить обращение № ${id} вместе с диагностикой и историей?`)) return;
+    await api('/api/admin/tickets/' + id, {method:'DELETE'});
+    await showAdminTickets();
+  });
 }
 function navigate(path) {
   history.pushState(null, '', path);
@@ -177,16 +190,54 @@ function navigate(path) {
 function newTicket() {
   state.ticketId = null; state.sessionId = null;
   content(`<div class="panel"><span class="kicker">НОВОЕ ОБРАЩЕНИЕ</span><h1>Регистрация проблемы</h1>
-    <p class="muted">Идентификатор абонента может быть номером договора или лицевого счёта.</p>
-    <form id="ticket-form"><div class="fields">
-      <label class="field">Идентификатор абонента<input name="subscriber" required maxlength="100" placeholder="Например, 100254"></label>
-      <label class="field">Описание проблемы<textarea name="description" required minlength="5" maxlength="2000" placeholder="Что именно не работает и когда началась проблема?"></textarea></label>
-    </div><div class="actions"><button class="btn primary" type="submit">Сохранить обращение</button><button type="button" id="cancel" class="btn">Отмена</button></div></form></div>`);
+    <p class="muted">Найдите действующее подключение клиента и выберите его адрес.</p>
+    <form id="lookup-form"><div class="actions lookup-modes">
+      <label><input type="radio" name="mode" value="contract" checked> Номер договора и ФИО</label>
+      <label><input type="radio" name="mode" value="phone"> Номер телефона</label></div>
+      <div class="fields" id="contract-fields">
+        <label class="field">Номер договора<input name="account_number" maxlength="100" placeholder="Например, 0000001"></label>
+        <label class="field">ФИО клиента<input name="full_name" maxlength="200" placeholder="Как записано в карточке клиента"></label></div>
+      <div class="fields" id="phone-fields" hidden>
+        <label class="field">Номер телефона<input name="phone" type="tel" maxlength="40" placeholder="Например, +7 999 123-45-67"></label></div>
+      <button type="submit" class="btn">Найти подключения</button></form>
+    <div id="lookup-results" aria-live="polite"></div><div class="divider"></div>
+    <form id="ticket-form"><div class="fields"><label class="field">Описание проблемы
+      <textarea name="description" required minlength="5" maxlength="2000" placeholder="Что именно не работает и когда началась проблема?"></textarea></label></div>
+      <div class="actions"><button class="btn primary" type="submit" disabled>Создать обращение</button>
+      <button type="button" id="cancel" class="btn">Отмена</button></div></form></div>`);
   $('#cancel').onclick = welcome;
+  let selectedServiceId = null;
+  const clearSelection = () => { selectedServiceId = null; $('#ticket-form button[type="submit"]').disabled = true; $('#lookup-results').innerHTML = ''; };
+  document.querySelectorAll('[name="mode"]').forEach(radio => radio.onchange = () => {
+    const byPhone = document.querySelector('[name="mode"]:checked').value === 'phone';
+    $('#phone-fields').hidden = !byPhone;
+    $('#contract-fields').hidden = byPhone;
+    clearSelection();
+  });
+  $('#lookup-form').oninput = clearSelection;
+  $('#lookup-form').onsubmit = event => { event.preventDefault(); run(async () => {
+    const form = new FormData(event.target);
+    const mode = String(form.get('mode'));
+    const params = new URLSearchParams({mode,
+      account_number:String(form.get('account_number') || ''),
+      full_name:String(form.get('full_name') || ''), phone:String(form.get('phone') || '')});
+    const services = await api('/api/services/lookup?' + params);
+    clearSelection();
+    $('#lookup-results').innerHTML = services.length ? `<h2>Найденные подключения</h2><div class="option-list">${services.map(s =>
+      `<button type="button" class="option service-choice" data-service="${s.id}"><span class="option-dot"></span>
+        <span><strong>${safe(s.client_name)} · договор ${safe(s.account_number)}</strong><br>
+        <small>Адрес подключения: ${safe(s.city)}, ${safe(s.street)}, д. ${safe(s.building)}${s.apartment ? ', кв. ' + safe(s.apartment) : ''} · ${safe(s.tariff_name)}</small></span></button>`).join('')}</div>` : '<p class="muted">Подключения не найдены. Проверьте данные или попросите администратора добавить подключение.</p>';
+    document.querySelectorAll('.service-choice').forEach(button => button.onclick = () => {
+      document.querySelectorAll('.service-choice').forEach(item => item.classList.remove('selected'));
+      button.classList.add('selected'); selectedServiceId = Number(button.dataset.service);
+      $('#ticket-form button[type="submit"]').disabled = false;
+    });
+  }); };
   $('#ticket-form').onsubmit = event => { event.preventDefault(); run(async () => {
+    if (selectedServiceId === null) throw new Error('Сначала выберите подключение клиента');
     const form = new FormData(event.target);
     const ticket = await api('/api/tickets', {method:'POST',body:JSON.stringify({
-      subscriber_id:String(form.get('subscriber')).trim(),
+      service_id:selectedServiceId,
       problem_description:String(form.get('description')).trim()})});
     await loadTickets(); await openTicket(ticket.id);
   }); };
@@ -197,9 +248,10 @@ async function openTicket(id) {
   content(`<div class="panel"><div class="heading"><div><span class="kicker">КАРТОЧКА ОБРАЩЕНИЯ</span><h1>Обращение № ${t.id}</h1></div>
     <span class="badge ${t.status}">${labels[t.status]}</span></div>
     <p>${safe(t.problem_description)}</p>
-    <div class="meta"><div><small>Абонент</small><b>${safe(t.subscriber_id)}</b></div>
+    <div class="meta"><div><small>Договор</small><b>${safe(t.subscriber_id)}</b></div>
       <div><small>Оператор</small><b>${safe(t.created_by)}</b></div>
       <div><small>Создано</small><b>${date(t.created_at)}</b></div></div>
+    ${t.service ? `<p class="muted smalltext">Клиент: ${safe(t.service.client_name)} · Телефон: ${safe(t.service.phone || '—')}<br>Адрес подключения: ${safe(t.service.city)}, ${safe(t.service.street)}, д. ${safe(t.service.building)}${t.service.apartment ? ', кв. ' + safe(t.service.apartment) : ''}</p>` : ''}
     ${['new','in_progress'].includes(t.status) && !t.sessions.some(s => s.status === 'active') ? '<div class="divider"></div><button id="start-session" class="btn primary">Начать диагностику</button>' : ''}</div>
     <div class="panel"><h2>Диагностические сессии</h2>${t.sessions.length ? t.sessions.map(s =>
       `<button class="btn small session-link" data-session="${s.id}">${date(s.started_at)} · ${s.status === 'active' ? 'В процессе' : safe(s.suspected_cause)}</button>`).join(' ') : '<p class="muted smalltext">Диагностика ещё не проводилась.</p>'}</div>
